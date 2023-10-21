@@ -1,9 +1,9 @@
 import EventEmitter from "events";
 import {SerialPort} from "serialport";
-import {PDUParser, pduMessage} from "pdu.ts";
+import {pduMessage, PDUParser} from "pdu.ts";
 import {logger_in, logger_out} from "./debug";
 // @ts-ignore
-import pdu from "node-pdu";
+import pdu, {Submit} from "node-pdu";
 
 interface UDH {
     parts: number,
@@ -147,23 +147,25 @@ export class GSM extends EventEmitter {
     }
 
     public async sendMessage(number: string, message: string) {
-        let submit = pdu.Submit();
-        submit.setAddress(number.replace('+', ''));
-        submit.setData(message);
-        submit.getDcs().setUseMessageClass(false);
+        let submit = new Submit(number.replace('+', ''), message);
         const parts = submit.getParts();
-        await this.reset();
-        await this.setPDUMode();
-        for(let i = 0; i < parts.length; i++) {
-            await this.setLength((parts[i].toString().length/2) - 1);
-            await this.setMessage(parts[i].toString());
+        await this.reset().catch(e => console.log('reset', e))
+        await this.setPDUMode().catch(e => console.log('setPDUMode', e))
+
+        for (let i = 0; i < parts.length; i++) {
+            const partString = parts[i].toString(submit)
+                .replace("0B819", '0B919') //Фикс какого-то пиздеца
+            const len = (partString.length / 2) - 1
+            await this.setLength(len).catch(e => console.log('setLength', e));
+            await this.setMessage(partString).catch(e => console.log('setMessage', e));
         }
     }
 
     public async deleteMessage(msg: Message): Promise<void> {
-        if(!msg) return;
-        for (const i of msg.indexes) {
-            await this.sendCommand(`AT+CMGD=${i}`);
+        if (!msg) return;
+        for (let i = 0; i < msg.indexes.length; i++) {
+            const val = msg.indexes[i]
+            await this.sendCommand(`AT+CMGD=${val}`);
         }
     }
 
@@ -216,26 +218,26 @@ export class GSM extends EventEmitter {
     public async getMessages(): Promise<Message[]> {
         let messages = (await this.getAllPDUMessages().then(msgs => msgs.map(m => this.parsePDUMessage(m))));
         messages = messages.map(m => {
-                if (m.message.udh) {
-                    if (m.message.udh.current_part === 1) {
-                        const parts = messages
-                            .filter(m2 => m2.message.udh)
-                            .filter(m2 => m2.message.udh?.reference_number === m.message.udh?.reference_number);
-                        return {
-                            ...m,
-                            message: {
-                                ...m.message,
-                                text: parts.map(m2 => m2.message.text).join(''),
-                                multipart: true,
-                                parts: m.message.udh.parts,
-                                parts_raw: parts
-                            }
+            if (m.message.udh) {
+                if (m.message.udh.current_part === 1) {
+                    const parts = messages
+                        .filter(m2 => m2.message.udh)
+                        .filter(m2 => m2.message.udh?.reference_number === m.message.udh?.reference_number);
+                    return {
+                        ...m,
+                        message: {
+                            ...m.message,
+                            text: parts.map(m2 => m2.message.text).join(''),
+                            multipart: true,
+                            parts: m.message.udh.parts,
+                            parts_raw: parts
                         }
                     }
-                    return undefined;
                 }
-                return {...m, multipart: false, message: {...m.message, parts: 1}};
-            }).filter(m => m !== undefined) as GsmMessage[];
+                return undefined;
+            }
+            return {...m, multipart: false, message: {...m.message, parts: 1}};
+        }).filter(m => m !== undefined) as GsmMessage[];
         return messages.map(m => GSM.convertToCleanMessage(m));
     }
 
