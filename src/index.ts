@@ -132,6 +132,8 @@ export class GSM extends EventEmitter {
     }
 
     private async setMessage(message: string): Promise<void> {
+        const len = (message.length / 2) - 1
+        await this.setLength(len).catch(e => console.log('setLength', e));
         return this.sendCommand(`${message}`, '\x1a');
     }
 
@@ -147,16 +149,13 @@ export class GSM extends EventEmitter {
     }
 
     public async sendMessage(number: string, message: string) {
-        let submit = new Submit(number.replace('+', ''), message);
+        let submit = new Submit(number, message);
         const parts = submit.getParts();
         await this.reset().catch(e => console.log('reset', e))
         await this.setPDUMode().catch(e => console.log('setPDUMode', e))
 
         for (let i = 0; i < parts.length; i++) {
             const partString = parts[i].toString(submit)
-                .replace("0B819", '0B919') //Фикс какого-то пиздеца
-            const len = (partString.length / 2) - 1
-            await this.setLength(len).catch(e => console.log('setLength', e));
             await this.setMessage(partString).catch(e => console.log('setMessage', e));
         }
     }
